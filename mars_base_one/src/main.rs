@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     let mut app = App::new();
     add_phase!(app, GamePhase, GamePhase::Playing,
         start => [setup],
-        run => [end_game, physics_clock, sum_impulses, apply_gravity, apply_velocity],
+        run => [movement, end_game, physics_clock, sum_impulses, apply_gravity, apply_velocity, terminal_velocity.after(apply_velocity) ],
         exit => [ cleanup::<GameElement> ]
     );
     app.add_event::<Impulse>();
@@ -45,14 +45,8 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn setup(
-    mut commands: Commands,
-    assets: Res<AssetStore>,
-    loaded_assets: Res<LoadedAssets>,
-) {
-    commands
-        .spawn(Camera2d::default())
-        .insert(GameElement);
+fn setup(mut commands: Commands, assets: Res<AssetStore>, loaded_assets: Res<LoadedAssets>) {
+    commands.spawn(Camera2d::default()).insert(GameElement);
 
     spawn_image!(
         assets,
@@ -72,7 +66,52 @@ fn setup(
 
 fn end_game(
     mut state: ResMut<NextState<GamePhase>>,
-    assets: Res<AssetStore>,
+    player_query: Query<&Transform, With<Player>>,
 ) {
-    //let _ = state.set(GamePhase::GameOver);
+    let Ok(transform) = player_query.single() else {
+        return;
+    };
+    if transform.translation.y < -384.0
+        || transform.translation.y > 384.0
+        || transform.translation.x < -512.0
+        || transform.translation.x > 512.0
+    {
+        state.set(GamePhase::GameOver);
+    }
+}
+
+fn movement(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut player_query: Query<(Entity, &mut Transform), With<Player>>,
+    mut impulses: EventWriter<Impulse>,
+) {
+    let Ok((entity, mut transform)) = player_query.single_mut() else {
+        return;
+    };
+    if keyboard.pressed(KeyCode::ArrowLeft) {
+        transform.rotate(Quat::from_rotation_z(f32::to_radians(2.0)));
+    }
+    if keyboard.pressed(KeyCode::ArrowRight) {
+        transform.rotate(Quat::from_rotation_z(f32::to_radians(-2.0)));
+    }
+    if keyboard.pressed(KeyCode::ArrowUp) {
+        impulses.write(Impulse {
+            target: entity,
+            amount: transform.local_y().as_vec3(),
+            absolute: false,
+            source: 1,
+        });
+    }
+}
+
+fn terminal_velocity(mut player_query: Query<&mut Velocity, With<Player>>) {
+    let Ok(mut velocity) = player_query.single_mut() else {
+        return;
+    };
+    let v2 = velocity.0.truncate();
+    if v2.length() > 5.0 {
+        let v2 = v2.normalize() * 5.0;
+        velocity.0.x = v2.x;
+        velocity.0.y = v2.y;
+    }
 }
