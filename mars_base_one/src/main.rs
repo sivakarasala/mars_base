@@ -20,7 +20,11 @@ enum GamePhase {
 struct GameElement;
 
 #[derive(Component)]
-struct Player;
+struct Player {
+    miners_saved: u32,
+    shields: i32,
+    fuel: i32,
+}
 
 fn main() -> anyhow::Result<()> {
     let mut app = App::new();
@@ -33,7 +37,7 @@ fn main() -> anyhow::Result<()> {
       start => [ setup ],
       run => [ movement, end_game, physics_clock, sum_impulses, apply_gravity, apply_velocity,
         terminal_velocity.after(apply_velocity), check_collisions::<Player, Ground>, bounce,
-        camera_follow.after(terminal_velocity), show_performance, spawn_particle_system, particle_age_system ],
+        camera_follow.after(terminal_velocity), show_performance, spawn_particle_system, particle_age_system, score_display ],
       exit => [ cleanup::<GameElement> ]
     );
 
@@ -145,7 +149,7 @@ fn setup(
         1.0,
         &loaded_assets,
         GameElement,
-        Player,
+        Player { miners_saved: 0, shields: 500, fuel: 100_000 },
         Velocity::default(),
         PhysicsPosition::new(Vec2::new(0.0, 200.0)),
         ApplyGravity,
@@ -681,3 +685,20 @@ struct Battery;
 
 #[derive(Component)]
 struct Fuel;
+
+fn score_display(
+    player: Query<&Player>,
+    mut egui_context: egui::EguiContexts,
+) {
+    let Ok(player) = player.single() else {
+        return;
+    };
+    egui::egui::Window::new("Score").show(
+        egui_context.ctx_mut(),
+        |ui| {
+            ui.label(format!("Miners Saved: {}", player.miners_saved));
+            ui.label(format!("Shields: {}", player.shields));
+            ui.label(format!("Fuel: {}", player.fuel));
+        }
+    );
+}
