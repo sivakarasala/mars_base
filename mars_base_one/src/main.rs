@@ -417,7 +417,23 @@ impl World {
                     uv.push([0.0, 1.0]);
                     uv.push([0.0, 0.0]);
 
-                    tile_positions.push((left + 12.0, top + 12.0));
+                    let mut needs_physics = false;
+
+                    if x == 0 || x > self.width - 3 || y == 0 || y > self.height - 3 {
+                        needs_physics = true;
+                    } else {
+                        // Are we surrounded by solid tiles?
+                        let solid_count = self.solid[self.mapidx(x - 1, y)] as u8
+                            + self.solid[self.mapidx(x + 1, y)] as u8
+                            + self.solid[self.mapidx(x, y - 1)] as u8
+                            + self.solid[self.mapidx(x, y + 1)] as u8;
+                        if solid_count < 4 {
+                            needs_physics = true;
+                        }
+                    }
+                    if needs_physics {
+                        tile_positions.push((left + 12.0, top + 12.0));
+                    }
                 }
             }
         }
