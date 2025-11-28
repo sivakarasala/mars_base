@@ -56,7 +56,10 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(
         AssetManager::new()
             .add_image("ship", "ship.png")?
-            .add_image("ground", "ground.png")?,
+            .add_image("ground", "ground.png")?
+            .add_image("backdrop", "backing.png")?
+            .add_image("particle", "particle.png")?
+            .add_image("mothership", "mothership.png")?,
     )
     .add_plugins(FrameTimeDiagnosticsPlugin { ..default() })
     .insert_resource(Animations::new())
@@ -141,6 +144,17 @@ fn setup(
         AxisAlignedBoundingBox::new(24.0, 24.0)
     );
 
+    spawn_image!(
+        assets,
+        commands,
+        "mothership",
+        0.0,
+        400.0,
+        10.0,
+        &loaded_assets,
+        GameElement
+    );
+
     let mut lock = NEW_WORLD.lock().unwrap();
     let world = lock.take().unwrap();
     world.spawn(
@@ -154,6 +168,22 @@ fn setup(
         Vec2::new(400.0 * 24.0, 400.0 * 24.0),
         6,
     ));
+
+    // Backdrop
+    let x = 100.0;
+    let y = 100.0;
+    let x_scale = (200.0 * 24.0) / 1720.0;
+    let y_scale = (300.0 * 24.0) / 1024.0;
+    let center_x = (x as f32 * 24.0) - ((200.0 / 2.0) * 24.0);
+    let center_y = ((y as f32 + 1.0) * 24.0) - (200.0 * 24.0);
+    let mut transform = Transform::from_xyz(center_x, center_y, -10.0);
+    transform.scale = Vec3::new(x_scale, y_scale, 1.0);
+    commands
+        .spawn(Sprite::from_image(
+            assets.get_handle("backdrop", &loaded_assets).unwrap(),
+        ))
+        .insert(transform)
+        .insert(GameElement);
 }
 
 fn movement(
