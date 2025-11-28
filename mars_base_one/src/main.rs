@@ -37,7 +37,14 @@ fn main() -> anyhow::Result<()> {
       start => [ setup ],
       run => [ movement, end_game, physics_clock, sum_impulses, apply_gravity, apply_velocity,
         terminal_velocity.after(apply_velocity), check_collisions::<Player, Ground>, bounce,
-        camera_follow.after(terminal_velocity), show_performance, spawn_particle_system, particle_age_system, score_display ],
+        camera_follow.after(terminal_velocity), show_performance, spawn_particle_system,
+        particle_age_system, miner_beacon, score_display,
+        check_collisions::<Player, Miner>, check_collisions::<Player, Fuel>,
+        check_collisions::<Player, Battery>,
+        collect_game_element_and_despawn::<Miner, { BurstColor::Green as u8 }>,
+        collect_game_element_and_despawn::<Fuel, { BurstColor::Orange as u8 }>,
+        collect_game_element_and_despawn::<Battery, { BurstColor::Magenta as u8 }>
+        ],
       exit => [ cleanup::<GameElement> ]
     );
 
@@ -71,6 +78,9 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(FrameTimeDiagnosticsPlugin { ..default() })
     .insert_resource(Animations::new())
     .add_event::<OnCollision<Player, Ground>>()
+    .add_event::<OnCollision<Player, Miner>>()
+    .add_event::<OnCollision<Player, Fuel>>()
+    .add_event::<OnCollision<Player, Battery>>()
     .add_event::<SpawnParticle>()
     .run();
 
@@ -149,7 +159,11 @@ fn setup(
         1.0,
         &loaded_assets,
         GameElement,
-        Player { miners_saved: 0, shields: 500, fuel: 100_000 },
+        Player {
+            miners_saved: 0,
+            shields: 500,
+            fuel: 100_000
+        },
         Velocity::default(),
         PhysicsPosition::new(Vec2::new(0.0, 200.0)),
         ApplyGravity,
@@ -200,11 +214,11 @@ fn setup(
 
 fn movement(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut player_query: Query<(Entity, &mut Transform), With<Player>>,
+    mut player_query: Query<(Entity, &mut Transform, &mut Player)>,
     mut impulses: EventWriter<Impulse>,
     mut particles: EventWriter<SpawnParticle>,
 ) {
-    let Ok((entity, mut transform)) = player_query.single_mut() else {
+    let Ok((entity, mut transform, mut player)) = player_query.single_mut() else {
         return;
     };
     if keyboard.pressed(KeyCode::ArrowLeft) {
@@ -228,18 +242,21 @@ fn movement(
         });
     }
     if keyboard.pressed(KeyCode::ArrowUp) {
-        impulses.write(Impulse {
-            target: entity,
-            amount: transform.local_y().as_vec3(),
-            absolute: false,
-            source: 1,
-        });
-        particles.write(SpawnParticle {
-            position: transform.local_y().truncate()
-                + Vec2::new(transform.translation.x, transform.translation.y),
-            color: LinearRgba::new(0.0, 1.0, 1.0, 1.0),
-            velocity: -transform.local_y().as_vec3(),
-        });
+        if player.fuel > 0 {
+            impulses.write(Impulse {
+                target: entity,
+                amount: transform.local_y().as_vec3(),
+                absolute: false,
+                source: 1,
+            });
+            particles.write(SpawnParticle {
+                position: transform.local_y().truncate()
+                    + Vec2::new(transform.translation.x, transform.translation.y),
+                color: LinearRgba::new(0.0, 1.0, 1.0, 1.0),
+                velocity: -transform.local_y().as_vec3(),
+            });
+            player.fuel -= 1;
+        }
     }
 }
 
@@ -255,19 +272,13 @@ fn terminal_velocity(mut player_query: Query<&mut Velocity, With<Player>>) {
     }
 }
 
-fn end_game(
-    mut state: ResMut<NextState<GamePhase>>,
-    player_query: Query<&Transform, With<Player>>,
-) {
-    let Ok(transform) = player_query.single() else {
+fn end_game(mut state: ResMut<NextState<GamePhase>>, player_query: Query<&Player>) {
+    let Ok(player) = player_query.single() else {
         return;
     };
-    if transform.translation.y < -384.0
-        || transform.translation.y > 384.0
-        || transform.translation.x < -512.0
-        || transform.translation.x > 512.0
-    {
-        //state.set(GamePhase::GameOver);
+    if player.miners_saved == 20 {
+        // You won!
+        state.set(GamePhase::GameOver);
     }
 }
 
@@ -286,15 +297,17 @@ fn camera_follow(
 
 fn bounce(
     mut collisions: EventReader<OnCollision<Player, Ground>>,
-    mut player_query: Query<&PhysicsPosition, With<Player>>,
+    mut player_query: Query<(&PhysicsPosition, &mut Player)>,
     ground_query: Query<&PhysicsPosition, With<Ground>>,
     mut impulses: EventWriter<Impulse>,
+    mut particles: EventWriter<SpawnParticle>,
+    mut state: ResMut<NextState<GamePhase>>,
 ) {
     let mut bounce = Vec2::default();
     let mut entity = None;
     let mut bounces = 0;
     for collision in collisions.read() {
-        if let Ok(player) = player_query.single_mut() {
+        if let Ok((player, _)) = player_query.single_mut() {
             if let Ok(ground) = ground_query.get(collision.entity_b) {
                 entity = Some(collision.entity_a);
                 let difference = player.start_frame - ground.start_frame;
@@ -311,6 +324,22 @@ fn bounce(
             absolute: true,
             source: 2,
         });
+
+        // Spawn a burst of particles
+        let Ok((player_pos, mut player)) = player_query.single_mut() else {
+            return;
+        };
+        particle_burst(
+            player_pos.end_frame,
+            LinearRgba::new(0.0, 0.0, 1.0, 1.0),
+            &mut particles,
+            3.0,
+        );
+        // Reduce the player's shield level
+        player.shields -= 1;
+        if player.shields <= 0 {
+            state.set(GamePhase::GameOver);
+        }
     }
 }
 
@@ -686,19 +715,127 @@ struct Battery;
 #[derive(Component)]
 struct Fuel;
 
-fn score_display(
-    player: Query<&Player>,
-    mut egui_context: egui::EguiContexts,
-) {
+fn score_display(player: Query<&Player>, mut egui_context: egui::EguiContexts) {
     let Ok(player) = player.single() else {
         return;
     };
-    egui::egui::Window::new("Score").show(
-        egui_context.ctx_mut(),
-        |ui| {
-            ui.label(format!("Miners Saved: {}", player.miners_saved));
-            ui.label(format!("Shields: {}", player.shields));
-            ui.label(format!("Fuel: {}", player.fuel));
+    egui::egui::Window::new("Score").show(egui_context.ctx_mut(), |ui| {
+        ui.label(format!("Miners Saved: {}", player.miners_saved));
+        ui.label(format!("Shields: {}", player.shields));
+        ui.label(format!("Fuel: {}", player.fuel));
+    });
+}
+
+fn particle_burst(
+    center: Vec2,
+    color: LinearRgba,
+    spawn: &mut EventWriter<SpawnParticle>,
+    velocity: f32,
+) {
+    for angle in 0..360 {
+        let angle = (angle as f32).to_radians();
+        let velocity = Vec3::new(angle.cos() * velocity, angle.sin() * velocity, 0.0);
+        spawn.write(SpawnParticle {
+            position: center,
+            color,
+            velocity,
+        });
+    }
+}
+
+fn miner_beacon(
+    mut rng: ResMut<RandomNumberGenerator>,
+    miners: Query<&Transform, With<Miner>>,
+    mut spawn: EventWriter<SpawnParticle>,
+) {
+    for miner in miners.iter() {
+        if rng.range(1..=100) == 100 {
+            particle_burst(
+                miner.translation.truncate(),
+                LinearRgba::new(1.0, 1.0, 0.0, 1.0),
+                &mut spawn,
+                10.0,
+            );
         }
-    );
+    }
+}
+
+trait OnCollect {
+    fn effect(player: &mut Player);
+}
+
+impl OnCollect for Miner {
+    fn effect(player: &mut Player) {
+        player.miners_saved += 1;
+    }
+}
+
+impl OnCollect for Fuel {
+    fn effect(player: &mut Player) {
+        player.fuel += 1000;
+    }
+}
+
+impl OnCollect for Battery {
+    fn effect(player: &mut Player) {
+        player.shields += 100;
+    }
+}
+
+#[repr(u8)]
+enum BurstColor {
+    Green,
+    Orange,
+    Magenta,
+}
+
+impl From<u8> for BurstColor {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => BurstColor::Green,
+            1 => BurstColor::Orange,
+            2 => BurstColor::Magenta,
+            _ => panic!("Invalid BurstColor value"),
+        }
+    }
+}
+
+impl Into<LinearRgba> for BurstColor {
+    fn into(self) -> LinearRgba {
+        match self {
+            BurstColor::Green => LinearRgba::new(0.0, 1.0, 0.0, 1.0),
+            BurstColor::Orange => LinearRgba::new(1.0, 0.5, 0.0, 1.0),
+            BurstColor::Magenta => LinearRgba::new(1.0, 0.0, 1.0, 1.0),
+        }
+    }
+}
+
+fn collect_game_element_and_despawn<T: Component + OnCollect, const COLOR: u8>(
+    mut collisions: EventReader<OnCollision<Player, T>>,
+    mut commands: Commands,
+    mut player: Query<(&mut Player, &Transform)>,
+    mut spawn: EventWriter<SpawnParticle>,
+) {
+    let mut collected = Vec::new();
+    for collision in collisions.read() {
+        collected.push(collision.entity_b);
+    }
+    let Ok((mut player, player_pos)) = player.single_mut() else {
+        return;
+    };
+    for miner in collected.iter() {
+        if commands.get_entity(*miner).is_ok() {
+            commands.entity(*miner).despawn();
+        }
+        T::effect(&mut player);
+    }
+    if !collected.is_empty() {
+        // Spawn burst of particles
+        particle_burst(
+            player_pos.translation.truncate(),
+            BurstColor::from(COLOR).into(),
+            &mut spawn,
+            2.0,
+        );
+    }
 }
