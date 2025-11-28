@@ -59,7 +59,10 @@ fn main() -> anyhow::Result<()> {
             .add_image("ground", "ground.png")?
             .add_image("backdrop", "backing.png")?
             .add_image("particle", "particle.png")?
-            .add_image("mothership", "mothership.png")?,
+            .add_image("mothership", "mothership.png")?
+            .add_image("spaceman", "spaceman.png")?
+            .add_image("fuel", "fuel.png")?
+            .add_image("battery", "battery.png")?,
     )
     .add_plugins(FrameTimeDiagnosticsPlugin { ..default() })
     .insert_resource(Animations::new())
@@ -88,7 +91,11 @@ fn spawn_builder() {
         let mut rng = my_library::RandomNumberGenerator::new();
 
         // Spawn the world
-        let world = World::new(200, 200, &mut rng);
+        let mut world = World::new(200, 200, &mut rng);
+
+        // Shuffle possible miner positions and limit the size to 20
+        use my_library::rand::seq::SliceRandom;
+        world.spawn_positions.shuffle(&mut rng.rng);
 
         // Store the world
         let mut lock = NEW_WORLD.lock().unwrap();
@@ -315,6 +322,7 @@ struct World {
     height: usize,
     mesh: Option<Mesh>,
     tile_positions: Vec<(f32, f32)>,
+    spawn_positions: Vec<(f32, f32)>,
 }
 
 impl World {
@@ -373,6 +381,7 @@ impl World {
             solid: vec![true; width * height],
             mesh: None,
             tile_positions: Vec::new(),
+            spawn_positions: Vec::new(),
         };
 
         // Set the center tile and surrounding tiles to be empty
@@ -434,33 +443,32 @@ impl World {
             }
         }
 
-        let (mesh, tile_positions) = result.build_mesh();
+        let (mesh, tile_positions, possible_miner_positions) = result.build_mesh();
         result.mesh = Some(mesh);
         result.tile_positions = tile_positions;
+        result.spawn_positions = possible_miner_positions;
 
         result
     }
 
-    fn build_mesh(&self) -> (Mesh, Vec<(f32, f32)>) {
+    fn build_mesh(&self) -> (Mesh, Vec<(f32, f32)>, Vec<(f32, f32)>) {
         let mut position = Vec::new();
         let mut uv = Vec::new();
         let mut tile_positions = Vec::new();
-        let x_offset = (self.width as f32 / 2.0) * 24.0;
-        let y_offset = (self.height as f32) * 24.0;
+        let mut possible_miner_positions = Vec::new();
         for y in 0..self.height {
             for x in 0..self.width {
+                let left = (x as f32 * 24.0) - ((self.width as f32 / 2.0) * 24.0);
+                let right = ((x as f32 + 1.0) * 24.0) - ((self.width as f32 / 2.0) * 24.0);
+                let top = (y as f32 * 24.0) - ((self.height as f32) * 24.0);
+                let bottom = ((y as f32 + 1.0) * 24.0) - ((self.height as f32) * 24.0);
                 if self.solid[self.mapidx(x, y)] {
-                    let left = (x as f32 * 24.0) - x_offset;
-                    let right = ((x as f32 + 1.0) * 24.0) - x_offset;
-                    let top = (y as f32 * 24.0) - y_offset;
-                    let bottom = ((y as f32 + 1.0) * 24.0) - y_offset;
-
-                    position.push([left, bottom, 1.0]);
-                    position.push([right, bottom, 1.0]);
-                    position.push([right, top, 1.0]);
-                    position.push([right, top, 1.0]);
-                    position.push([left, bottom, 1.0]);
-                    position.push([left, top, 1.0]);
+                    position.push([left, bottom, 10.0]);
+                    position.push([right, bottom, 10.0]);
+                    position.push([right, top, 10.0]);
+                    position.push([right, top, 10.0]);
+                    position.push([left, bottom, 10.0]);
+                    position.push([left, top, 10.0]);
 
                     uv.push([0.0, 1.0]);
                     uv.push([1.0, 1.0]);
@@ -486,6 +494,15 @@ impl World {
                     if needs_physics {
                         tile_positions.push((left + 12.0, top + 12.0));
                     }
+                } else {
+                    if x > 1
+                        && x < self.width - 3
+                        && y > 1
+                        && y < self.height - 3
+                        && self.solid[self.mapidx(x, y - 1)]
+                    {
+                        possible_miner_positions.push((left + 12.0, top + 12.0));
+                    }
                 }
             }
         }
@@ -498,6 +515,7 @@ impl World {
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, position)
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv),
             tile_positions,
+            possible_miner_positions,
         )
     }
 
@@ -527,6 +545,63 @@ impl World {
                 .insert(Ground)
                 .insert(PhysicsPosition::new(Vec2::new(*x, *y)))
                 .insert(AxisAlignedBoundingBox::new(24.0, 24.0));
+        }
+
+        // Spawn miners
+        for (x, y) in self.spawn_positions.iter().take(20) {
+            spawn_image!(
+                assets,
+                commands,
+                "spaceman",
+                *x,
+                *y,
+                10.0,
+                loaded_assets,
+                GameElement,
+                Miner,
+                Velocity::default(),
+                PhysicsPosition::new(Vec2::new(*x, *y)),
+                // Extra Large Hitbox
+                AxisAlignedBoundingBox::new(48.0, 48.0)
+            );
+        }
+
+        // Spawn fuel
+        for (x, y) in self.spawn_positions.iter().skip(20).take(20) {
+            spawn_image!(
+                assets,
+                commands,
+                "fuel",
+                *x,
+                *y,
+                10.0,
+                loaded_assets,
+                GameElement,
+                Fuel,
+                Velocity::default(),
+                PhysicsPosition::new(Vec2::new(*x, *y)),
+                // Extra Large Hitbox
+                AxisAlignedBoundingBox::new(48.0, 48.0)
+            );
+        }
+
+        // Spawn batteries
+        for (x, y) in self.spawn_positions.iter().skip(40).take(10) {
+            spawn_image!(
+                assets,
+                commands,
+                "battery",
+                *x,
+                *y,
+                10.0,
+                loaded_assets,
+                GameElement,
+                Battery,
+                Velocity::default(),
+                PhysicsPosition::new(Vec2::new(*x, *y)),
+                // Extra Large Hitbox
+                AxisAlignedBoundingBox::new(48.0, 48.0)
+            );
         }
     }
 }
@@ -597,3 +672,12 @@ fn particle_age_system(
         sprite.color.set_alpha(particle.lifetime / 2.0);
     }
 }
+
+#[derive(Component)]
+struct Miner;
+
+#[derive(Component)]
+struct Battery;
+
+#[derive(Component)]
+struct Fuel;

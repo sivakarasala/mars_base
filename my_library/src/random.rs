@@ -39,7 +39,7 @@ type RngCore = rand_xorshift::XorShiftRng;
 //END: rngstruct
 #[derive(bevy::prelude::Resource)]
 pub struct RandomNumberGenerator {
-    rng: RngCore,
+    pub rng: RngCore,
 }
 
 impl Default for RandomNumberGenerator {

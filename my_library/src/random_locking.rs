@@ -14,7 +14,7 @@ type RngCore = rand_pcg::Pcg64Mcg;
 type RngCore = rand_xorshift::XorShiftRng;
 
 pub struct RandomNumberGenerator {
-    rng: Mutex<RngCore>,
+    pub rng: Mutex<RngCore>,
 }
 
 impl Default for RandomNumberGenerator {
