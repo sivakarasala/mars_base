@@ -24,6 +24,7 @@ struct Player {
     miners_saved: u32,
     shields: i32,
     fuel: i32,
+    score: u32,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -45,8 +46,11 @@ fn main() -> anyhow::Result<()> {
         collect_game_element_and_despawn::<Fuel, { BurstColor::Orange as u8 }>,
         collect_game_element_and_despawn::<Battery, { BurstColor::Magenta as u8 }>
         ],
-      exit => [ cleanup::<GameElement> ]
+      exit => [ submit_score, cleanup::<GameElement>.after(submit_score) ]
     );
+
+    app.add_event::<FinalScore>();
+    app.add_systems(Update, final_score.run_if(in_state(GamePhase::GameOver)));
 
     app.add_event::<Impulse>();
     app.add_event::<PhysicsTick>();
@@ -162,7 +166,8 @@ fn setup(
         Player {
             miners_saved: 0,
             shields: 500,
-            fuel: 100_000
+            fuel: 100_000,
+            score: 0,
         },
         Velocity::default(),
         PhysicsPosition::new(Vec2::new(0.0, 200.0)),
@@ -720,6 +725,7 @@ fn score_display(player: Query<&Player>, mut egui_context: egui::EguiContexts) {
         return;
     };
     egui::egui::Window::new("Score").show(egui_context.ctx_mut(), |ui| {
+        ui.label(format!("Score: {}", player.score));
         ui.label(format!("Miners Saved: {}", player.miners_saved));
         ui.label(format!("Shields: {}", player.shields));
         ui.label(format!("Fuel: {}", player.fuel));
@@ -767,6 +773,14 @@ trait OnCollect {
 impl OnCollect for Miner {
     fn effect(player: &mut Player) {
         player.miners_saved += 1;
+
+        player.score += 1000;
+        if player.shields > 0 {
+            player.score += player.shields as u32;
+        }
+        if player.fuel > 1000 {
+            player.score += player.fuel as u32;
+        }
     }
 }
 
@@ -838,4 +852,62 @@ fn collect_game_element_and_despawn<T: Component + OnCollect, const COLOR: u8>(
             2.0,
         );
     }
+}
+
+#[derive(Event)]
+struct FinalScore(u32);
+
+fn submit_score(player: Query<&Player>, mut final_score: EventWriter<FinalScore>) {
+    for player in player.iter() {
+        final_score.write(FinalScore(player.score));
+    }
+}
+
+#[derive(Default)]
+struct ScoreState {
+    score: Option<u32>,
+    player_name: String,
+    submitted: bool,
+}
+
+fn final_score(
+    mut final_score: EventReader<FinalScore>,
+    mut state: Local<ScoreState>,
+    mut egui_context: egui::EguiContexts,
+) {
+    // Receive any score messages
+    for score in final_score.read() {
+        state.score = Some(score.0);
+    }
+    // Don't show the window if the score has been submitted
+    if state.submitted {
+        return;
+    }
+    // Display the score input
+    if let Some(score) = state.score {
+        egui::egui::Window::new("Final Score").show(egui_context.ctx_mut(), |ui| {
+            ui.label(format!("Final Score: {}", score));
+            ui.label("Please enter your name:");
+            ui.text_edit_singleline(&mut state.player_name);
+            if ui.button("Submit Score").clicked() {
+                state.submitted = true;
+                let entry = HighScoreEntry {
+                    name: state.player_name.clone(),
+                    score,
+                };
+                std::thread::spawn(move || {
+                    ureq::post("http://localhost:3030/scoreSubmit")
+                        .timeout(std::time::Duration::from_secs(5))
+                        .send_json(entry)
+                        .expect("Failed to submit score");
+                });
+            }
+        });
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HighScoreEntry {
+    name: String,
+    score: u32,
 }
