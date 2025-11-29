@@ -52,6 +52,11 @@ fn main() -> anyhow::Result<()> {
     app.add_event::<FinalScore>();
     app.add_systems(Update, final_score.run_if(in_state(GamePhase::GameOver)));
 
+    app.add_systems(
+        Update,
+        highscore_table.run_if(in_state(GamePhase::MainMenu)),
+    );
+
     app.add_event::<Impulse>();
     app.add_event::<PhysicsTick>();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -910,4 +915,49 @@ fn final_score(
 struct HighScoreEntry {
     name: String,
     score: u32,
+}
+
+#[derive(Default)]
+struct HighScoreTableState {
+    entries: Option<HighScoreTable>,
+    receiver: Option<std::sync::mpsc::Receiver<HighScoreTable>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HighScoreTable {
+    entries: Vec<HighScoreEntry>,
+}
+
+fn highscore_table(mut state: Local<HighScoreTableState>, mut egui_context: egui::EguiContexts) {
+    if state.receiver.is_none() {
+        // Create the channel
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.receiver = Some(rx);
+
+        // Request the table
+        std::thread::spawn(move || {
+            let table = ureq::get("http://localhost:3030/highScores")
+                .timeout(std::time::Duration::from_secs(5))
+                .call()
+                .unwrap()
+                .into_json::<HighScoreTable>()
+                .unwrap();
+            let _ = tx.send(table);
+        });
+    } else {
+        // Receive the result
+        if let Some(rx) = &state.receiver {
+            if let Ok(table) = rx.try_recv() {
+                state.entries = Some(table);
+            }
+        }
+        if let Some(table) = &state.entries {
+            // Display the table
+            egui::egui::Window::new("High Scores").show(egui_context.ctx_mut(), |ui| {
+                for entry in table.entries.iter() {
+                    ui.label(format!("{}: {}", entry.name, entry.score));
+                }
+            });
+        }
+    }
 }
