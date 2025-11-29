@@ -14,4 +14,4 @@ rand_xorshift = { version = "0.3" }
 anyhow = "1"
 
 [workspace]
-members = ["mars_base_one","my_library"]
+members = ["highscore_server","mars_base_one","my_library"]
